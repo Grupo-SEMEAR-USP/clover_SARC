@@ -106,12 +106,11 @@ def find_centroid(cv_img: np.ndarray, red_mask: np.ndarray) -> float or None:
             red_cx = int(red_moment["m10"]/red_moment["m00"]) 
             red_cy = int(red_moment["m01"]/red_moment["m00"])
             #  Creating a point to represent the centroid 
-            cv2.circle(cv_img, (red_cx, red_cy), 7, (0, 0, 255), -1)
+            cv2.circle(cv_img, (red_cx, red_cy), 7, (0, 255, 255), -1)
 
     return max_area
 
 def is_centered(x: float, y: float, z: float, red_mask: np.ndarray, goto: Function):
-    print(x, y, z)
     
     x_min, y_min, x_max, y_max = find_dimensions_of_fire(red_mask)
 
@@ -132,8 +131,6 @@ def is_centered(x: float, y: float, z: float, red_mask: np.ndarray, goto: Functi
     else:
         real_x, real_y = estimate_3d_coordinates(center_pixel_x, center_pixel_y, z)
 
-        #print([x, y], [real_x, real_y])
-
         dist = distance_2d(center_pixel_x, center_pixel_y, camera_center_x, camera_center_y)
         max_dist = min(camera_center_x, camera_center_y)
 
@@ -145,8 +142,7 @@ def is_centered(x: float, y: float, z: float, red_mask: np.ndarray, goto: Functi
         x += real_y
         y += real_x
 
-    goto(x, y, z)
-    print("Going")
+    goto(x=x, y=y, z=z)
     return False
 
 class Controller:
@@ -159,6 +155,7 @@ class Controller:
         self.set_attitude = rospy.ServiceProxy('set_attitude', srv.SetAttitude)
         self.set_rates = rospy.ServiceProxy('set_rates', srv.SetRates)
         self.land = rospy.ServiceProxy('land', Trigger)
+        self.set_effect = rospy.ServiceProxy('led/set_effect', srv.SetLEDEffect)
 
         self.bridge = CvBridge()
 
@@ -172,9 +169,12 @@ class Controller:
         while not self.started:
             pass
 
-        self.goto(z=1, auto_arm=True)
+        if not self.armed():
+            self.goto(z=1, auto_arm=True, frame_id='body')
 
-    def goto(self, x=0, y=0, z=0, yaw=float('nan'), speed=0.5, frame_id='map', auto_arm=False, tolerance=0.2):
+        input("Start?")
+
+    def goto(self, x=0, y=0, z=0, yaw=0, speed=0.5, frame_id='map', auto_arm=False):
         self.navigate(x=x, y=y, z=z, yaw=yaw, speed=speed, frame_id=frame_id, auto_arm=auto_arm)
 
     def arrived(self, tolerance=0.2):
@@ -209,18 +209,25 @@ class Controller:
 
         if self.state == STARTING:
             if self.arrived():
-                self.goto(x=5)
+                self.goto(x=5, y=0, z=1)
+                self.set_effect(effect='blink', r=255, g=0, b=0)
+                print("Searching")
                 self.state = SEARCHING
         elif self.state == SEARCHING:
             if self.max_fire_area and self.max_fire_area > THRESHOLD:
                 position = self.get_telemetry(frame_id='map')
                 self.goto(position.x, position.y, position.z)
+                self.set_effect(effect='blink', r=255, g=255, b=255)
+                print("Centering")
                 self.state = CENTERING
         elif self.state == CENTERING:
             position = self.get_telemetry(frame_id='map')
-            print(position)
             if is_centered(position.x, position.y, position.z, self.mask_red, self.goto):
+                position = self.get_telemetry(frame_id='map')
+                self.goto(position.x, position.y, position.z)
                 self.state = CENTERED
+                self.set_effect(effect='rainbow')
+                print("Centered")
         elif self.state == CENTERED:
             pass
 
@@ -235,12 +242,16 @@ class Controller:
 
 rospy.init_node('flight')
 
-print("start")
+#print("start")
 
 control = Controller()
 
-while not rospy.is_shutdown():
-    control.update()
+try:
+    while not rospy.is_shutdown():
+        control.update()
+except:
+    control.land()
+    print("\nLanding")
 
 print("end")
 
